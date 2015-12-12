@@ -1,0 +1,4 @@
+[package]
+name = "synacor"
+version = "0.1.0"
+authors = ["Martin Thoresen <martinhath@gmail.com>"]
