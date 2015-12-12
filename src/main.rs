@@ -19,11 +19,11 @@ impl Default for Unit {
 }
 
 fn bytes_to_unit(lower: u8, upper: u8) -> Option<Unit> {
-    let res: u16 = lower as u16 + upper as u16;
+    let res: u16 = lower as u16 + ((upper as u16) << 8);
     if res > 32767 {
         if res > 32775 {
             // invalid
-            println!("[bytes_to_unit]: illegal number: {} {}", lower, upper);
+            println!("[bytes_to_unit]: illegal number: {} {} (res = {})", lower, upper, res);
             None
         } else {
             Some(Unit::Register(res - 32768))
@@ -99,6 +99,7 @@ struct Instruction {
     a: Unit,
     b: Unit,
     c: Unit, // what is memory??
+    n_args: usize,
 }
 
 #[allow(dead_code)]
@@ -129,6 +130,7 @@ impl Instruction {
                 a: Default::default(),
                 b: Default::default(),
                 c: Default::default(),
+                n_args: 0,
             })
         } else {
             None
@@ -144,12 +146,15 @@ impl Instruction {
         let mut instruction = instruction.unwrap();
         // @TODO: bounds checks
         match Instruction::num_args(instruction.itype as u32) {
-            1 => {instruction.a = data[1];}
+            1 => {instruction.a = data[1];
+                  instruction.n_args = 1;}
             2 => {instruction.a = data[1];
-                  instruction.b = data[2];}
+                  instruction.b = data[2];
+                  instruction.n_args = 2;}
             3 => {instruction.a = data[1];
                   instruction.b = data[2];
-                  instruction.c = data[3];}
+                  instruction.c = data[3];
+                  instruction.n_args = 2;}
             _ => {}
         };
         Some(instruction)
@@ -161,17 +166,24 @@ struct SystemState {
     registers: [u16; 8],
     memory: [Unit; MAX_MEM],
     stack: Vec<u16>,
+    pc: usize,
     halt: bool,
 }
 
 #[allow(dead_code)]
 fn run_instruction(s: SystemState, instr: Instruction) -> SystemState {
     let mut state = s;
-
     match instr.itype {
         InstructionType::Halt => {
             state.halt = true;
             return state;
+        }
+        InstructionType::Jmp => {
+            // yolo mode engage
+            if let Unit::Number(pc) = instr.a {
+                state.pc = pc as usize;
+            }
+            state
         }
         InstructionType::Out => {
             let c = instr.a;
@@ -183,7 +195,8 @@ fn run_instruction(s: SystemState, instr: Instruction) -> SystemState {
             }
             state
         }
-        _ => {
+        _ => { // implicit NOP
+            println!("[DEBUG]: {:?}", instr);
             return state;
         }
     }
@@ -224,11 +237,14 @@ fn run_file(s: SystemState, filename: String) {
     }
 
     // Program loop.
-    let mut pc = 0;
     let pc_end = state.memory.len();
-    while pc < pc_end {
-        let instr = Instruction::next_instruction(&state.memory[pc..]);
+    while state.pc < pc_end {
+
+        let instr = Instruction::next_instruction(&state.memory[state.pc..]);
+        let mut n_args = 0;
+
         if let Some(instruction) = instr {
+            n_args = instruction.n_args;
             // println!("{:?}", instruction);
 
             state = run_instruction(state, instruction);
@@ -237,7 +253,7 @@ fn run_file(s: SystemState, filename: String) {
                 break;
             }
         } // silent fail errors
-        pc += 1;
+        state.pc += 1 + n_args;
     }
 }
 
@@ -250,6 +266,7 @@ fn main() {
             registers: [0; 8],
             memory:    [Unit::Number(0); 32768],
             stack: Vec::new(),
+            pc: 0,
             halt: false,
         };
         run_file(system_state, filename);
