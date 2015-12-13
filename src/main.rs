@@ -206,7 +206,7 @@ impl Instruction {
             3 => {instruction.a = data[1];
                   instruction.b = data[2];
                   instruction.c = data[3];
-                  instruction.n_args = 2;}
+                  instruction.n_args = 3;}
             _ => {}
         };
         Some(instruction)
