@@ -6,6 +6,7 @@ const MAX_MEM: usize = 32768;
 use std::env;
 use std::fs::File;
 use std::io::Read;
+use std::io::Write;
 use std::fmt;
 
 
@@ -221,9 +222,11 @@ struct SystemState {
     pc: usize,
     halt: bool,
     jumped: bool,
+    input_string: String,
 }
 
 impl SystemState {
+
     fn value(&self, unit: Unit) -> u16 {
         match unit {
             Register(r)   => self.registers[r as usize],
@@ -231,20 +234,21 @@ impl SystemState {
             Uninitialized => panic!("Try to access unitilialized value"),
         }
     }
-}
 
-fn arithmetic_instr(f: Box<Fn(u16, u16) -> u16>, a: Unit, b: Unit) -> Option<u16> {
-    if let (Number(x), Number(y)) = (a, b) {
-        let res = f(x, y);
-        Some(res)
-    } else {
-        None
+    fn value_mut(&mut self, unit: Unit) -> &mut u16 {
+        match unit {
+            Register(r)   => self.registers.get_mut(r as usize).unwrap(),
+            Number(n)     => {
+                let data = self.memory.get_mut(n as usize).unwrap();
+                match data {
+                    &mut Register(_)   => panic!("try to get value_mut on register value in memory"),
+                    &mut Number(ref mut n)     => n,
+                    &mut Uninitialized => panic!("Try to access unitilialized value"),
+                }
+            }
+            Uninitialized => panic!("Try to access unitilialized value"),
+        }
     }
-}
-
-fn arithmetic_instr_mod(f: Box<Fn(u16, u16) -> u16>, a: Unit, b: Unit) -> Option<u16> {
-    arithmetic_instr(f, a, b)
-        .map(|n| n % MAX_NUM)
 }
 
 #[allow(dead_code)]
@@ -256,31 +260,34 @@ fn run_instruction(s: SystemState, instr: Instruction) -> SystemState {
             return state;
         }
         InstructionType::Set => {
-            let reg = instr.a;
-            if let Register(r) = reg {
-                let num = instr.b;
-                if let Number(n) = num {
-                    state.registers[r as usize] = n;
-                }
-            }
+            let val = state.value(instr.b);
+            let res = state.value_mut(instr.a);
+            *res = val;
         }
         InstructionType::Push => {
-            state.stack.push(instr.a);
+            let val = state.value(instr.a);
+            state.stack.push(Number(val));
         }
         InstructionType::Pop => {
-            println!("pop instr: a = {:?}", instr.a);
+            let top = state.stack.pop();
+            if top.is_none() {
+                state.halt = true;
+                return state;
+            }
+            let res = state.value_mut(instr.a);
+            *res = top.unwrap().value();
         }
         InstructionType::Eq => {
-            if let Register(r) = instr.a {
-                state.registers[r as usize] = if instr.b == instr.c {1} else {0};
-            }
+            let b = state.value(instr.b);
+            let c = state.value(instr.c);
+            let res = state.value_mut(instr.a);
+            *res = if b == c { 1 } else { 0 };
         }
         InstructionType::Gt => {
-            if let Register(r) = instr.a {
-                if let (Number(b), Number(c)) = (instr.b, instr.c) {
-                    state.registers[r as usize] = if b > c {1} else {0};
-                }
-            }
+            let b = state.value(instr.b);
+            let c = state.value(instr.c);
+            let res = state.value_mut(instr.a);
+            *res = if b > c { 1 } else { 0 };
         }
         InstructionType::Jmp => {
             // yolo mode engage
@@ -308,81 +315,59 @@ fn run_instruction(s: SystemState, instr: Instruction) -> SystemState {
         InstructionType::Add => {
             let a = state.value(instr.b);
             let b = state.value(instr.c);
-            let res = a + b % MAX_NUM;
-
-            match instr.a {
-                Register(reg) => state.registers[reg as usize] = res,
-                Number(n)     => state.memory[n as usize] = Unit::from_u16(res).unwrap(),
-                Uninitialized => panic!("asd"),
-            }
+            let res = state.value_mut(instr.a);
+            *res = (a + b) % MAX_NUM;
         }
         InstructionType::Mult => {
-            if let Register(a) = instr.a {
-                let f = Box::new(|a, b| {a * b});
-                let res = arithmetic_instr_mod(f, instr.b, instr.c);
-                if let Some(n) = res {
-                    state.registers[a as usize] = n;
-                }
-            }
+            // @TODO: Fix 'as u64' stuff ?
+            let a = state.value(instr.b) as u64;
+            let b = state.value(instr.c) as u64;
+            let res = state.value_mut(instr.a);
+            *res = ((a * b) % MAX_NUM as u64) as u16;
         }
         InstructionType::Mod => {
-            if let Register(a) = instr.a {
-                let f = Box::new(|a, b| {a % b});
-                let res = arithmetic_instr(f, instr.b, instr.c);
-                if let Some(n) = res {
-                    state.registers[a as usize] = n;
-                }
-            }
+            let a = state.value(instr.b);
+            let b = state.value(instr.c);
+            let res = state.value_mut(instr.a);
+            *res = a % b;
         }
         InstructionType::And => {
-            if let Register(a) = instr.a {
-                let f = Box::new(|a, b| {a & b});
-                let res = arithmetic_instr(f, instr.b, instr.c);
-                if let Some(n) = res {
-                    state.registers[a as usize] = n;
-                }
-            }
+            let a = state.value(instr.b);
+            let b = state.value(instr.c);
+            let res = state.value_mut(instr.a);
+            *res = a & b;
         }
         InstructionType::Or => {
-            if let Register(a) = instr.a {
-                let f = Box::new(|a, b| {a | b});
-                let res = arithmetic_instr(f, instr.b, instr.c);
-                if let Some(n) = res {
-                    state.registers[a as usize] = n;
-                }
-            }
+            let a = state.value(instr.b);
+            let b = state.value(instr.c);
+            let res = state.value_mut(instr.a);
+            *res = a | b;
         }
         InstructionType::Not => {
-            if let Register(a) = instr.a {
-                if let Number(n) = instr.b {
-                    state.registers[a as usize] = !n;
-                }
-            }
+            let n = state.value(instr.b);
+            let res = state.value_mut(instr.a);
+            *res = !n % MAX_NUM;
         }
         InstructionType::Rmem => {
-            if let Register(a) = instr.a {
-                if let Number(mem) = instr.b {
-                    let data = state.memory[mem as usize];
-                    state.registers[a as usize] = data.value();
-                }
-            }
+            let addr = state.value(instr.b) as usize;
+            let data = state.memory[addr];
+            let res = state.value_mut(instr.a);
+            *res = data.value();
         }
         InstructionType::Wmem => {
-            if let Register(r) = instr.a {
-                if let Number(val) = instr.b {
-                    let addr = state.registers[r as usize] as usize;
-                    let unit = Unit::from_u16(val);
-                    if let Some(u) = unit {
-                        state.memory[addr] = u;
-                    }
-                }
-            }
+            let addr = state.value(instr.a) as usize;
+            let data = state.value(instr.b);
+            state.memory[addr] = Unit::from_u16(data).unwrap();
         }
         InstructionType::Call => {
-            if let Number(n) = instr.a {
-                state.stack.push(Number(state.pc as u16));
-                state.pc = n as usize;
+            let addr = state.value(instr.a) as usize;
+            let unit = Unit::from_u16((state.pc + 1 + instr.n_args) as u16);
+            if let Some(u) = unit {
+                state.stack.push(u);
+                state.pc = addr;
                 state.jumped = true;
+            } else {
+                println!("PC was too high: {}! Shit design fix pls", state.pc);
             }
         }
         InstructionType::Ret => {
@@ -394,19 +379,31 @@ fn run_instruction(s: SystemState, instr: Instruction) -> SystemState {
             let num = num.unwrap();
             if let Number(n) = num {
                 state.pc = n as usize;
+                state.jumped = true;
             }
         }
         InstructionType::Out => {
-            let c = instr.a;
-            if let Number(n) = c {
-                let c = n as u8;
-                print!("{}", c as char);
-            } else {
-                panic!("error");
-            }
+            let data = state.value(instr.a) as u8;
+            print!("{}", data as char);
         }
         InstructionType::In => {
-            println!("instruction 'in'");
+            let char;
+            { // rust werks
+                let ref mut is = state.input_string;
+                if is.len() == 0 {
+                    let mut buffer = String::new();
+                    let mut result = std::io::stdin().read_line(&mut buffer);
+                    while result.is_err() {
+                        result = std::io::stdin().read_line(&mut buffer);
+                    }
+                    for char in buffer.chars().rev() {
+                        is.push(char);
+                    }
+                }
+                char = is.pop().unwrap() as u16;
+            }
+            let res = state.value_mut(instr.a);
+            *res = char;
         }
         InstructionType::Noop => {
         }
@@ -450,13 +447,13 @@ fn run_file(s: SystemState, filename: String) {
 
     // Program loop.
     let pc_end = state.memory.len();
+
     while state.pc < pc_end {
 
         let instr = Instruction::next_instruction(&state.memory[state.pc..]);
         let mut n_args = 0;
 
         if let Some(instruction) = instr {
-            println!("pc = {} (op={:?})", state.pc, instruction);
             n_args = instruction.n_args;
 
             state = run_instruction(state, instruction);
@@ -475,7 +472,6 @@ fn run_file(s: SystemState, filename: String) {
 
 
 fn main() {
-
     // Filename should be first argument
     for filename in env::args().skip(1).take(1) {
         let system_state = SystemState {
@@ -485,6 +481,7 @@ fn main() {
             pc: 0,
             halt: false,
             jumped: false,
+            input_string: String::new(),
         };
         run_file(system_state, filename);
     }
