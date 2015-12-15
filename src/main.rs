@@ -223,6 +223,7 @@ struct SystemState {
     halt: bool,
     jumped: bool,
     input_string: String,
+    debug: bool,
 }
 
 impl SystemState {
@@ -249,10 +250,56 @@ impl SystemState {
             Uninitialized => panic!("Try to access unitilialized value"),
         }
     }
+
+    fn handle_command(&mut self, string: String) {
+        if string.len() < 4 { return; }
+        let mut split = string.split_whitespace();
+        let command = split.next().unwrap();
+        let r = split.next();
+
+        match command {
+            "/get" => {
+                let reg = r.unwrap().parse::<usize>().expect("Error reading register");
+                println!(">>> r{} = {}", reg, self.registers[reg])
+            }
+            "/set" => {
+                let reg = r.unwrap().parse::<usize>().expect("Error reading register");
+                let val = split.next().unwrap().parse::<u16>().expect("Error reading value");
+                self.registers[reg] = val;
+            }
+            // "/sav" => {
+            //     let fname = split.next().unwrap();
+            //     let dump = serialize(&self);
+            //     file = File::new(fname)
+            //     file.write(dump);
+            // }
+            // "/lod" => {
+            //     let fname = split.next().unwrap();
+            //     let file = File::open(fname);
+            //     let str = String::new();
+            //     file.read_to_string(str);
+            //     self = deserialize(str);
+            // }
+            "/dmp" => {
+                println!("dumping whole memory to strerr (pc = {})", self.pc);
+                let mut i = 0;
+                let end = self.memory.len();
+                while i < end  {
+                    let instr = Instruction::next_instruction(&self.memory[i..]);
+                    if let Some(instruction) = instr {
+                        let _ = write!(std::io::stderr(), "{:>5}| {:?}\n", i, instruction);
+                        i += instruction.n_args;
+                    }
+                    i += 1;
+                }
+            }
+            _      => {}
+        }
+    }
 }
 
 #[allow(dead_code)]
-fn run_instruction(s: SystemState, instr: Instruction) -> SystemState {
+fn run_instruction(s: &mut SystemState, instr: Instruction) -> &SystemState {
     let mut state = s;
     match instr.itype {
         InstructionType::Halt => {
@@ -411,9 +458,8 @@ fn run_instruction(s: SystemState, instr: Instruction) -> SystemState {
     state
 }
 
-
 #[allow(dead_code)]
-fn run_file(s: SystemState, filename: String) {
+fn run_file(s: SystemState, filename: String, reg7: u16) {
     let mut state = s;
     let file = File::open(filename.clone());
     if let Err(e) = file {
@@ -456,7 +502,24 @@ fn run_file(s: SystemState, filename: String) {
         if let Some(instruction) = instr {
             n_args = instruction.n_args;
 
-            state = run_instruction(state, instruction);
+            run_instruction(&mut state, instruction);
+
+            if state.debug {
+                let _ = write!(std::io::stderr(), "{:>5}| {:?}\n", state.pc, instruction);
+            }
+
+            let is: String = state.input_string.chars().rev().collect();
+            if is.starts_with("/") {
+                state.handle_command(is);
+                state.pc -= 1;
+                state.input_string = String::new();
+            } else if is.starts_with("se teleporter") {
+                state.registers[7] = reg7;
+            }
+
+            if state.pc == 6050 {
+                break;
+            }
 
             if state.halt {
                 break;
@@ -472,17 +535,22 @@ fn run_file(s: SystemState, filename: String) {
 
 
 fn main() {
+    let start_string = "doorway\nnorth\nnorth\nbridge\ncontinue\ndown\neast\ntake empty lantern\nwest\nwest\npassage\nladder\nwest\nsouth\nnorth\ntake can\nwest\nladder\ndarkness\nuse can\nuse lantern\ncontinue\nwest\nwest\nwest\nwest\nnorth\ntake red coin\nnorth\neast\ntake concave coin\ndown\ntake corroded coin\nup\nwest\nwest\ntake blue coin\nup\ntake shiny coin\ndown\neast\nuse blue coin\nuse red coin\nuse shiny coin\nuse concave coin\nuse corroded coin\nnorth\ntake teleporter\nuse teleporter\n";
+    let s: String = start_string.chars().rev().collect();
     // Filename should be first argument
-    for filename in env::args().skip(1).take(1) {
-        let system_state = SystemState {
-            registers: [0; 8],
-            memory:    [Number(0); 32768],
-            stack: Vec::new(),
-            pc: 0,
-            halt: false,
-            jumped: false,
-            input_string: String::new(),
-        };
-        run_file(system_state, filename);
-    }
+    let args: Vec<_> = env::args().skip(1).collect();
+    let filename = args[0].clone();
+    let reg7 = args[1].parse::<u16>().unwrap();
+
+    let system_state = SystemState {
+        registers: [0; 8],
+        memory:    [Number(0); 32768],
+        stack: Vec::new(),
+        pc: 0,
+        halt: false,
+        jumped: false,
+        input_string: s.clone(),
+        debug: false,
+    };
+    run_file(system_state, filename, reg7);
 }

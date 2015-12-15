@@ -1,2 +1,3 @@
 all:
-	cargo run -- challenge.bin
+	cargo build
+
