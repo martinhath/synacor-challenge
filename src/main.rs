@@ -176,6 +176,7 @@ impl Instruction {
         if let Number(n) = u {
             let t = InstructionType::from_u16(n);
             if t.is_none() {
+                writeln!(std::io::stderr(), "Unknown instruction number: {:<4} '{}'", n, (n as u8) as char);
                 return None;
             }
             Some(Instruction {
@@ -289,6 +290,8 @@ impl SystemState {
                     if let Some(instruction) = instr {
                         let _ = write!(std::io::stderr(), "{:>5}| {:?}\n", i, instruction);
                         i += instruction.n_args;
+                    } else {
+
                     }
                     i += 1;
                 }
@@ -453,13 +456,14 @@ fn run_instruction(s: &mut SystemState, instr: Instruction) -> &SystemState {
             *res = char;
         }
         InstructionType::Noop => {
+
         }
     };
     state
 }
 
 #[allow(dead_code)]
-fn run_file(s: SystemState, filename: String, reg7: u16) {
+fn run_file(s: SystemState, filename: String) {
     let mut state = s;
     let file = File::open(filename.clone());
     if let Err(e) = file {
@@ -494,7 +498,15 @@ fn run_file(s: SystemState, filename: String, reg7: u16) {
     // Program loop.
     let pc_end = state.memory.len();
 
+    let mut call_level: usize = 0;
+
     while state.pc < pc_end {
+
+        if state.debug && state.pc == 6027 {
+            state.registers[0] = 0;
+            state.registers[1] = state.registers[0];
+            state.pc = 0; // ret
+        }
 
         let instr = Instruction::next_instruction(&state.memory[state.pc..]);
         let mut n_args = 0;
@@ -502,23 +514,44 @@ fn run_file(s: SystemState, filename: String, reg7: u16) {
         if let Some(instruction) = instr {
             n_args = instruction.n_args;
 
-            run_instruction(&mut state, instruction);
-
             if state.debug {
-                let _ = write!(std::io::stderr(), "{:>5}| {:?}\n", state.pc, instruction);
+                let indent = call_level * 2;
+                let _ = write!(std::io::stderr(), "{:>5}| {: <3$} {:?}",
+                                 state.pc, " ", instruction, 
+                                 if indent > 160 { 160 } else { indent });
+
+                match instruction.itype {
+                    InstructionType::Call => {
+                        call_level += 1;
+                        let _ = write!(std::io::stderr(), "\t\t({} {} {})\n",
+                                       state.registers[0], state.registers[1], state.registers[7]);
+                    }
+                    InstructionType::Ret => {
+                        if call_level > 0 {
+                            call_level -= 1;
+                        }
+                        let _ = write!(std::io::stderr(), "\t\t\t[level: {}]", call_level);
+                    }
+                    InstructionType::Out => {
+                        let data = state.value(instruction.a) as u8;
+                        let _ = write!(std::io::stderr(), "\t\t\t{} ({})", data as char, data);
+                    }
+                    _ => {}
+                }
+
+                let _ = write!(std::io::stderr(), "\n");
             }
+
+            run_instruction(&mut state, instruction);
 
             let is: String = state.input_string.chars().rev().collect();
             if is.starts_with("/") {
                 state.handle_command(is);
                 state.pc -= 1;
                 state.input_string = String::new();
-            } else if is.starts_with("se teleporter") {
-                state.registers[7] = reg7;
-            }
-
-            if state.pc == 6050 {
-                break;
+            } else if is.starts_with("se teleporter") && state.registers[7] != 0 {
+                // state.registers[7] = reg7;
+                state.debug = true;
             }
 
             if state.halt {
@@ -540,7 +573,6 @@ fn main() {
     // Filename should be first argument
     let args: Vec<_> = env::args().skip(1).collect();
     let filename = args[0].clone();
-    let reg7 = args[1].parse::<u16>().unwrap();
 
     let system_state = SystemState {
         registers: [0; 8],
@@ -552,5 +584,5 @@ fn main() {
         input_string: s.clone(),
         debug: false,
     };
-    run_file(system_state, filename, reg7);
+    run_file(system_state, filename);
 }
